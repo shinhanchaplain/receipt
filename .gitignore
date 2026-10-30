@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Temporary excel files
+temp_*.xlsx
+*성능테스트결과*.xlsx
+*테스트결과*.xlsx
+
+# Streamlit config
+.streamlit/secrets.toml
