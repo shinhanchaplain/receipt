@@ -31,13 +31,6 @@ st.markdown("""
         color: #64748B;
         margin-bottom: 1.5rem;
     }
-    .step-box {
-        background-color: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 20px;
-    }
     .step-header {
         font-size: 1.25rem;
         font-weight: 700;
@@ -65,21 +58,26 @@ st.markdown("""
         color: #64748B;
         margin-bottom: 4px;
     }
+    .clean-notice {
+        background-color: #F1F5F9;
+        border-left: 4px solid #3B82F6;
+        padding: 12px 16px;
+        border-radius: 6px;
+        font-size: 0.92rem;
+        color: #334155;
+        margin-bottom: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 DEFAULT_EXCEL_TEMPLATE = "법인카드 사용내역서.xlsx"
-DEFAULT_RECEIPT_PDF = "영수증.pdf"
 
-# 세션 상태 초기화
+# [보안/공용 PC 대응] 새 창 접속 시 항상 빈(Clean) 상태로 세션 시작
 if "receipt_data" not in st.session_state:
-    st.session_state.receipt_data = [dict(r) for r in SAMPLE_RECEIPTS]
+    st.session_state.receipt_data = []
 
 if "pdf_images" not in st.session_state:
     st.session_state.pdf_images = []
-    if os.path.exists(DEFAULT_RECEIPT_PDF):
-        with open(DEFAULT_RECEIPT_PDF, "rb") as f:
-            st.session_state.pdf_images = receipt_parser.extract_images_from_pdf(f.read())
 
 if "excel_template_bytes" not in st.session_state:
     if os.path.exists(DEFAULT_EXCEL_TEMPLATE):
@@ -89,35 +87,57 @@ if "excel_template_bytes" not in st.session_state:
         st.session_state.excel_template_bytes = None
 
 # 상단 헤더
-st.markdown('<div class="main-title">🧾 법인카드 영수증 자동 정리 & 엑셀 다운로드</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">🧾 법인카드 영수증 자동 정리 & 엑셀 생성</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">엑셀 양식 파일과 스캔 영수증을 업로드하고 <b>[실행]</b>을 누르면, '
-    'AI가 가맹점/일시/금액과 <b>수기 메모(보건소명/병원명 등 사용목적)</b>를 인식하여 엑셀에 자동으로 정리해줍니다.</div>',
+    '<div class="sub-title">영수증 스캔 파일과 엑셀 양식을 업로드하고 <b>[실행]</b>을 누르면, '
+    'AI가 가맹점/일시/금액과 <b>수기 메모(보건소명/병원명 등 사용목적)</b>를 인식하여 엑셀에 자동으로 정리합니다.</div>',
     unsafe_allow_html=True
 )
 
-# 사이드바 (API 키 및 기본 설정)
+st.markdown("""
+<div class="clean-notice">
+    🔒 <b>개인정보 및 다중 사용자 보안 보호</b>: 본 시스템은 사용자 간 정보 노출을 방지하기 위해 
+    새 창을 띄울 때마다 이전 데이터가 남지 않는 <b>클린 세션(Clean Session)</b>으로 시작합니다. 
+    작업 완료 후 [초기화]를 누르거나 창을 닫으면 입력된 데이터가 즉시 파기됩니다.
+</div>
+""", unsafe_allow_html=True)
+
+# 사이드바 (API 키 및 관리)
 with st.sidebar:
-    st.header("⚙️ 환경 설정")
+    st.header("⚙️ 시스템 설정")
     api_key_input = st.text_input(
-        "Gemini API Key (선택)",
+        "Gemini API Key",
         type="password",
         value=os.environ.get("GEMINI_API_KEY", ""),
-        help="새로운 영수증 스캔본을 실시간 비전 AI로 분석할 때 사용합니다. 미입력 시 내장 샘플 데이터셋으로 시연됩니다."
+        help="새로운 영수증 스캔본을 실시간 비전 AI로 분석할 때 사용합니다."
     )
     if api_key_input:
         os.environ["GEMINI_API_KEY"] = api_key_input
-        st.success("API Key 설정 완료")
+        st.success("API Key 적용됨")
     
     st.markdown("---")
-    st.caption("※ 사용자 등 영수증에서 확인되지 않는 항목은 기본적으로 **공란**으로 처리됩니다.")
+    st.subheader("🧪 시연용 샘플 테스트")
+    if st.button("샘플 영수증 데이터 불러오기", use_container_width=True):
+        st.session_state.receipt_data = [dict(r) for r in SAMPLE_RECEIPTS]
+        sample_pdf_path = "영수증.pdf"
+        if os.path.exists(sample_pdf_path):
+            with open(sample_pdf_path, "rb") as f:
+                st.session_state.pdf_images = receipt_parser.extract_images_from_pdf(f.read())
+        st.success("샘플 데이터가 로드되었습니다!")
+        st.rerun()
+
+    if st.button("🗑️ 전체 데이터 즉시 비우기 (초기화)", type="secondary", use_container_width=True):
+        st.session_state.receipt_data = []
+        st.session_state.pdf_images = []
+        st.info("모든 데이터가 깔끔하게 초기화되었습니다.")
+        st.rerun()
 
 # ==============================================================================
 # [STEP 1] 파일 업로드 및 실행 영역
 # ==============================================================================
 st.markdown("""
 <div class="step-header">
-    <span>📂 [1단계] 엑셀 양식 및 영수증 스캔 파일 업로드</span>
+    <span>📂 [1단계] 파일 업로드</span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -127,233 +147,241 @@ with col_up1:
     uploaded_excel = st.file_uploader(
         "1. 정리해서 넣을 엑셀 파일 (.xlsx)",
         type=["xlsx"],
-        help="법인카드 사용내역서 양식 엑셀 파일을 업로드하세요. (미업로드 시 기본 '법인카드 사용내역서.xlsx' 사용)"
+        key="uploader_excel",
+        help="법인카드 사용내역서 양식 엑셀 파일입니다. (미업로드 시 기본 표준 서식이 적용됩니다.)"
     )
     if uploaded_excel:
         st.session_state.excel_template_bytes = uploaded_excel.read()
-        st.caption(f"✔ 업로드된 엑셀: `{uploaded_excel.name}` 적용됨")
-    elif os.path.exists(DEFAULT_EXCEL_TEMPLATE):
-        st.caption(f"ℹ 기본 엑셀 양식 적용 중: `{DEFAULT_EXCEL_TEMPLATE}`")
+        st.caption(f"✔ 사용자 업로드 서식 적용: `{uploaded_excel.name}`")
+    else:
+        st.caption("ℹ 미업로드 시 기본 '법인카드 사용내역서.xlsx' 서식으로 자동 적용됩니다.")
 
 with col_up2:
     uploaded_receipt = st.file_uploader(
-        "2. 스캔한 영수증 파일 (PDF 또는 이미지)",
+        "2. 스캔한 영수증 파일 (PDF 또는 이미지) *필수*",
         type=["pdf", "png", "jpg", "jpeg"],
-        help="스캔된 영수증 PDF 또는 이미지 파일을 업로드하세요. (미업로드 시 기본 '영수증.pdf' 사용)"
+        key="uploader_receipt",
+        help="분석할 스캔 영수증 파일(PDF, PNG, JPG)을 업로드하세요."
     )
     if uploaded_receipt:
-        st.caption(f"✔ 업로드된 영수증: `{uploaded_receipt.name}` 준비됨")
-    elif os.path.exists(DEFAULT_RECEIPT_PDF):
-        st.caption(f"ℹ 기본 스캔 파일 적용 중: `{DEFAULT_RECEIPT_PDF}` (3페이지)")
+        st.caption(f"✔ 분석 대기 중: `{uploaded_receipt.name}`")
+    else:
+        st.caption("※ 분석할 영수증 파일을 여기에 업로드해주세요.")
 
-# 🚀 실행 버튼
+# 🚀 실행 및 초기화 버튼 영역
 col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+
 with col_btn2:
     run_btn = st.button("🚀 영수증 분석 & 엑셀 자동 정리 실행", type="primary", use_container_width=True)
 
+with col_btn3:
+    if st.session_state.receipt_data or st.session_state.pdf_images:
+        if st.button("🗑️ 내역 지우기", use_container_width=True):
+            st.session_state.receipt_data = []
+            st.session_state.pdf_images = []
+            st.rerun()
+
 if run_btn:
-    with st.spinner("영수증 이미지 및 손글씨(수기) 메모를 분석하여 엑셀 내역을 정리 중입니다..."):
-        # 1. 영수증 바이트 확보
-        if uploaded_receipt:
+    if not uploaded_receipt:
+        st.warning("⚠️ 스캔한 영수증 파일(PDF 또는 이미지)을 먼저 업로드해 주세요.")
+    else:
+        with st.spinner("영수증 이미지 및 손글씨(수기) 메모를 분석하여 엑셀 내역을 정리 중입니다..."):
             receipt_bytes = uploaded_receipt.getvalue()
             receipt_filename = uploaded_receipt.name
-        else:
-            with open(DEFAULT_RECEIPT_PDF, "rb") as f:
-                receipt_bytes = f.read()
-            receipt_filename = DEFAULT_RECEIPT_PDF
-        
-        # 2. 이미지 렌더링
-        if receipt_filename.lower().endswith(".pdf"):
-            st.session_state.pdf_images = receipt_parser.extract_images_from_pdf(receipt_bytes)
-        else:
-            st.session_state.pdf_images = [Image.open(io.BytesIO(receipt_bytes))]
 
-        # 3. 파싱 실행 (확인 안 되는 자료는 공란 세팅)
-        parsed_results = receipt_parser.parse_receipt_document(
-            file_bytes=receipt_bytes,
-            file_name=receipt_filename,
-            api_key=api_key_input or os.environ.get("GEMINI_API_KEY")
-        )
-        st.session_state.receipt_data = parsed_results
-        st.success(f"🎉 총 {len(parsed_results)}건의 영수증 내역 정리가 완료되었습니다! 아래에서 확인하세요.")
+            # 1. 이미지 렌더링 (미리보기용)
+            if receipt_filename.lower().endswith(".pdf"):
+                st.session_state.pdf_images = receipt_parser.extract_images_from_pdf(receipt_bytes)
+            else:
+                st.session_state.pdf_images = [Image.open(io.BytesIO(receipt_bytes))]
+
+            # 2. AI 파싱 실행 (확인 안 되는 항목은 공란 세팅)
+            api_key = api_key_input or os.environ.get("GEMINI_API_KEY")
+            parsed_results = receipt_parser.parse_receipt_document(
+                file_bytes=receipt_bytes,
+                file_name=receipt_filename,
+                api_key=api_key
+            )
+            st.session_state.receipt_data = parsed_results
+            st.success(f"🎉 총 {len(parsed_results)}건의 영수증 내역 정리가 완료되었습니다! 아래에서 확인하세요.")
+            st.rerun()
 
 st.markdown("---")
 
 # ==============================================================================
-# [STEP 2] 결과 검토 및 실시간 수정 영역
+# [STEP 2] 결과 검토 및 실시간 수정 영역 (데이터가 있을 때만 노출)
 # ==============================================================================
-st.markdown("""
-<div class="step-header">
-    <span>✏️ [2단계] 영수증 실물 확인 및 정리된 내역 검토 / 수정</span>
-</div>
-""", unsafe_allow_html=True)
-
-data_list = st.session_state.receipt_data
-total_count = len(data_list)
-total_amount = sum(int(str(r.get("amount", 0)).replace(",", "")) for r in data_list)
-avg_amount = total_amount // total_count if total_count > 0 else 0
-handwritten_count = sum(1 for r in data_list if r.get("purpose"))
-
-# KPI 카드
-col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-with col_m1:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-label">총 영수증 건수</div>
-        <div class="metric-value">{total_count}건</div>
-    </div>
-    """, unsafe_allow_html=True)
-with col_m2:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-label">총 지출 금액</div>
-        <div class="metric-value">{total_amount:,}원</div>
-    </div>
-    """, unsafe_allow_html=True)
-with col_m3:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-label">건당 평균 금액</div>
-        <div class="metric-value">{avg_amount:,}원</div>
-    </div>
-    """, unsafe_allow_html=True)
-with col_m4:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-label">수기 메모(목적) 인식</div>
-        <div class="metric-value" style="color: #059669;">{handwritten_count} / {total_count}</div>
+if st.session_state.receipt_data:
+    st.markdown("""
+    <div class="step-header">
+        <span>✏️ [2단계] 영수증 실물 확인 및 정리된 내역 검토 / 수정</span>
     </div>
     """, unsafe_allow_html=True)
 
-st.write("")
+    data_list = st.session_state.receipt_data
+    total_count = len(data_list)
+    total_amount = sum(int(str(r.get("amount", 0)).replace(",", "")) for r in data_list)
+    avg_amount = total_amount // total_count if total_count > 0 else 0
+    handwritten_count = sum(1 for r in data_list if r.get("purpose"))
 
-# 2열 레이아웃: 영수증 실물 뷰어 vs 데이터 에디터
-col_view, col_edit = st.columns([1, 1.3])
-
-with col_view:
-    st.subheader("👁️ 스캔 영수증 실물 뷰어")
-    if st.session_state.pdf_images:
-        num_pages = len(st.session_state.pdf_images)
-        page_idx = st.slider("페이지 선택", 1, num_pages, 1) if num_pages > 1 else 1
-        current_img = st.session_state.pdf_images[page_idx - 1]
-        st.image(
-            current_img,
-            caption=f"스캔본 {page_idx}페이지 (영수증 실물 및 상단 증빙서 첨부지)",
-            use_container_width=True
-        )
-        st.info("💡 영수증 여백에 적힌 수기 메모(예: '이정복 보건소', '영등포 보건소' 등)와 품목/수량을 직접 대조해보실 수 있습니다.")
-    else:
-        st.warning("표시할 영수증 이미지가 없습니다.")
-
-with col_edit:
-    st.subheader("📊 정리된 법인카드 내역서 (직접 수정 가능)")
-    st.caption("※ 셀을 더블 클릭하여 수정할 수 있습니다. 사용자 등 확인 불가 항목은 공란으로 비워져 있습니다.")
-
-    display_rows = []
-    for r in st.session_state.receipt_data:
-        display_rows.append({
-            "연번": r.get("seq", 1),
-            "사용일자": str(r.get("date", "")),
-            "사용시각": str(r.get("time", "")),
-            "사용장소": r.get("store_name", ""),
-            "사용목적(수기메모)": r.get("purpose", ""),
-            "대상인원": r.get("attendees", "3명"),
-            "카드끝4자리": str(r.get("card_last4", "9716")),
-            "금액(원)": int(str(r.get("amount", 0)).replace(",", "")),
-            "사용자": r.get("user_name", "")
-        })
-
-    df = pd.DataFrame(display_rows)
-
-    edited_df = st.data_editor(
-        df,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "연번": st.column_config.NumberColumn("연번", width=50),
-            "사용일자": st.column_config.TextColumn("사용일자", width=100),
-            "사용시각": st.column_config.TextColumn("사용시각", width=85),
-            "사용장소": st.column_config.TextColumn("사용장소 (가맹점)", width=130),
-            "사용목적(수기메모)": st.column_config.TextColumn("사용목적 (수기메모)", width=130),
-            "대상인원": st.column_config.SelectboxColumn(
-                "대상인원 (수량기반 자동산출)",
-                options=["1명", "2명", "3명", "4명", "5명", "6명", "7명", "8명", "9명", "10명"],
-                width=100
-            ),
-            "카드끝4자리": st.column_config.TextColumn("카드끝4자리", width=85),
-            "금액(원)": st.column_config.NumberColumn("금액(원)", format="%d원", width=95),
-            "사용자": st.column_config.TextColumn("사용자 (확인불가시 공란)", width=100),
-        },
-        height=380
-    )
-
-    # 수정된 데이터 세션에 반영
-    updated_receipts = []
-    for idx, row in edited_df.iterrows():
-        u_name = str(row["사용자"]).strip() if pd.notna(row["사용자"]) and str(row["사용자"]).strip() != "None" else ""
-        updated_receipts.append({
-            "seq": int(row["연번"]),
-            "date": str(row["사용일자"]),
-            "time": str(row["사용시각"]),
-            "store_name": str(row["사용장소"]),
-            "purpose": str(row["사용목적(수기메모)"]),
-            "attendees": str(row["대상인원"]),
-            "card_last4": str(row["카드끝4자리"]),
-            "amount": int(row["금액(원)"]),
-            "user_name": u_name,
-            "department": ""
-        })
-    st.session_state.receipt_data = updated_receipts
+    # KPI 지표 카드
+    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    with col_m1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">총 영수증 건수</div>
+            <div class="metric-value">{total_count}건</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_m2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">총 지출 금액</div>
+            <div class="metric-value">{total_amount:,}원</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_m3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">건당 평균 금액</div>
+            <div class="metric-value">{avg_amount:,}원</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_m4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">수기 메모(목적) 인식</div>
+            <div class="metric-value" style="color: #059669;">{handwritten_count} / {total_count}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.write("")
 
-    # ==============================================================================
-    # [STEP 3] 정리된 엑셀 파일 저장 및 다운로드 영역
-    # ==============================================================================
-    st.markdown("""
-    <div class="step-header">
-        <span>💾 [3단계] 정리된 엑셀 파일 저장</span>
-    </div>
-    """, unsafe_allow_html=True)
+    # 2열 레이아웃: 영수증 실물 뷰어 vs 데이터 에디터
+    col_view, col_edit = st.columns([1, 1.3])
 
-    try:
-        # 임시 템플릿 파일 생성
-        temp_tpl_path = "temp_active_template.xlsx"
-        if st.session_state.excel_template_bytes:
-            with open(temp_tpl_path, "wb") as f:
-                f.write(st.session_state.excel_template_bytes)
+    with col_view:
+        st.subheader("👁️ 스캔 영수증 실물 뷰어")
+        if st.session_state.pdf_images:
+            num_pages = len(st.session_state.pdf_images)
+            page_idx = st.slider("페이지 선택", 1, num_pages, 1) if num_pages > 1 else 1
+            current_img = st.session_state.pdf_images[page_idx - 1]
+            st.image(
+                current_img,
+                caption=f"스캔본 {page_idx}페이지 (영수증 실물 및 상단 증빙서 첨부지)",
+                use_container_width=True
+            )
+            st.info("💡 영수증 여백에 적힌 수기 메모(예: '이정복 보건소', '영등포 보건소' 등)와 품목/수량을 직접 대조해보실 수 있습니다.")
         else:
-            temp_tpl_path = DEFAULT_EXCEL_TEMPLATE
+            st.info("표시할 영수증 이미지가 없습니다.")
 
-        excel_bytes = excel_manager.fill_receipts_to_excel(
-            template_path=temp_tpl_path,
-            receipts=st.session_state.receipt_data
+    with col_edit:
+        st.subheader("📊 정리된 법인카드 내역서 (직접 수정 가능)")
+        st.caption("※ 셀을 더블 클릭하여 수정할 수 있습니다. 사용자 등 확인 불가 항목은 기본 공란으로 비워져 있습니다.")
+
+        display_rows = []
+        for r in st.session_state.receipt_data:
+            display_rows.append({
+                "연번": r.get("seq", 1),
+                "사용일자": str(r.get("date", "")),
+                "사용시각": str(r.get("time", "")),
+                "사용장소": r.get("store_name", ""),
+                "사용목적(수기메모)": r.get("purpose", ""),
+                "대상인원": r.get("attendees", "3명"),
+                "카드끝4자리": str(r.get("card_last4", "9716")),
+                "금액(원)": int(str(r.get("amount", 0)).replace(",", "")),
+                "사용자": r.get("user_name", "")
+            })
+
+        df = pd.DataFrame(display_rows)
+
+        edited_df = st.data_editor(
+            df,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "연번": st.column_config.NumberColumn("연번", width=50),
+                "사용일자": st.column_config.TextColumn("사용일자", width=100),
+                "사용시각": st.column_config.TextColumn("사용시각", width=85),
+                "사용장소": st.column_config.TextColumn("사용장소 (가맹점)", width=130),
+                "사용목적(수기메모)": st.column_config.TextColumn("사용목적 (수기메모)", width=130),
+                "대상인원": st.column_config.SelectboxColumn(
+                    "대상인원 (수량기반 자동산출)",
+                    options=["1명", "2명", "3명", "4명", "5명", "6명", "7명", "8명", "9명", "10명"],
+                    width=100
+                ),
+                "카드끝4자리": st.column_config.TextColumn("카드끝4자리", width=85),
+                "금액(원)": st.column_config.NumberColumn("금액(원)", format="%d원", width=95),
+                "사용자": st.column_config.TextColumn("사용자 (확인불가시 공란)", width=100),
+            },
+            height=380
         )
 
-        now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-        out_filename = f"법인카드_사용내역서_정리완료_{now_str}.xlsx"
+        # 수정된 데이터 세션에 반영
+        updated_receipts = []
+        for idx, row in edited_df.iterrows():
+            u_name = str(row["사용자"]).strip() if pd.notna(row["사용자"]) and str(row["사용자"]).strip() != "None" else ""
+            updated_receipts.append({
+                "seq": int(row["연번"]),
+                "date": str(row["사용일자"]),
+                "time": str(row["사용시각"]),
+                "store_name": str(row["사용장소"]),
+                "purpose": str(row["사용목적(수기메모)"]),
+                "attendees": str(row["대상인원"]),
+                "card_last4": str(row["카드끝4자리"]),
+                "amount": int(row["금액(원)"]),
+                "user_name": u_name,
+                "department": ""
+            })
+        st.session_state.receipt_data = updated_receipts
 
-        st.download_button(
-            label="📥 정리된 엑셀 파일 저장 및 다운로드 (.xlsx)",
-            data=excel_bytes,
-            file_name=out_filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True
-        )
-        st.caption("✔ 원본 엑셀의 서식, 폰트, 테두리 및 합계 수식(=SUM(H6:H17))이 100% 보존된 채로 저장됩니다.")
-    except Exception as e:
-        st.error(f"엑셀 파일 생성 중 오류: {e}")
+        st.write("")
 
-# 하단 세부 품목 아코디언
-st.markdown("---")
-with st.expander("🔍 영수증별 세부 품목 목록 및 개수 (인원 산출 근거)"):
-    for r in st.session_state.receipt_data:
-        st.markdown(f"**연번 {r.get('seq')}번 | {r.get('store_name')} ({r.get('purpose', '수기메모 없음')}) - 총 {r.get('amount', 0):,}원 | 대상인원: {r.get('attendees')}**")
-        items = r.get("items", [])
-        if items:
-            item_df = pd.DataFrame(items)
-            item_df.columns = ["품목명", "수량", "금액"]
-            st.table(item_df)
-        else:
-            st.text("품목 상세 정보가 없습니다.")
+        # ==============================================================================
+        # [STEP 3] 정리된 엑셀 파일 저장 및 다운로드 영역
+        # ==============================================================================
+        st.markdown("""
+        <div class="step-header">
+            <span>💾 [3단계] 정리된 엑셀 파일 저장</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        try:
+            # 메모리에서 즉시 엑셀 생성 (디스크에 임시 파일 남기지 않음)
+            template_source = st.session_state.excel_template_bytes if st.session_state.excel_template_bytes else DEFAULT_EXCEL_TEMPLATE
+
+            excel_bytes = excel_manager.fill_receipts_to_excel(
+                template_source=template_source,
+                receipts=st.session_state.receipt_data
+            )
+
+            now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+            out_filename = f"법인카드_사용내역서_정리완료_{now_str}.xlsx"
+
+            st.download_button(
+                label="📥 정리된 엑셀 파일 저장 및 다운로드 (.xlsx)",
+                data=excel_bytes,
+                file_name=out_filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True
+            )
+            st.caption("✔ 원본 엑셀 서식, 글꼴, 셀 테두리 및 합계 수식(=SUM(H6:H17))이 100% 보존되어 저장됩니다.")
+        except Exception as e:
+            st.error(f"엑셀 파일 생성 중 오류: {e}")
+
+    # 하단 세부 품목 아코디언
+    st.markdown("---")
+    with st.expander("🔍 영수증별 세부 품목 목록 및 개수 (인원 산출 근거)"):
+        for r in st.session_state.receipt_data:
+            st.markdown(f"**연번 {r.get('seq')}번 | {r.get('store_name')} ({r.get('purpose', '수기메모 없음')}) - 총 {r.get('amount', 0):,}원 | 대상인원: {r.get('attendees')}**")
+            items = r.get("items", [])
+            if items:
+                item_df = pd.DataFrame(items)
+                item_df.columns = ["품목명", "수량", "금액"]
+                st.table(item_df)
+            else:
+                st.text("품목 상세 정보가 없습니다.")
+else:
+    # 데이터가 없을 때 표시할 클린 안내 화면
+    st.info("👆 위 [1단계]에서 영수증 스캔 파일(PDF 또는 이미지)을 업로드하고 **[실행]** 버튼을 누르면 내역이 생성됩니다.")
