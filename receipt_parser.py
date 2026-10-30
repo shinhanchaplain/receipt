@@ -131,11 +131,12 @@ def parse_receipt_page_with_gemini(image: Image.Image, api_key: str, page_num: i
     raw_text = None
     errors = []
 
-    # 1. New Google GenAI SDK 시도
+    # 1. New Google GenAI SDK 시도 (최신 권장 gemini-3.8-flash 모델 적용)
     if NEW_GENAI:
         try:
             client = genai.Client(api_key=api_key)
-            for m_name in ['gemini-2.0-flash', 'gemini-1.5-flash']:
+            models_to_try = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+            for m_name in models_to_try:
                 try:
                     response = client.models.generate_content(
                         model=m_name,
@@ -162,7 +163,7 @@ def parse_receipt_page_with_gemini(image: Image.Image, api_key: str, page_num: i
     if not raw_text and legacy_genai is not None:
         try:
             legacy_genai.configure(api_key=api_key)
-            for m_name in ['gemini-1.5-flash', 'gemini-1.5-pro']:
+            for m_name in ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']:
                 try:
                     model = legacy_genai.GenerativeModel(
                         model_name=m_name,
