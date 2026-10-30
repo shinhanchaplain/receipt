@@ -65,13 +65,26 @@ def format_time_value(time_str):
     return str(time_str)
 
 def format_date_value(date_str):
+    """
+    문자열 날짜를 datetime.date 객체로 변환하여 엑셀에서 '################' 오류가 나지 않도록 보장
+    """
     if not date_str:
-        return ""
+        return None
+    if isinstance(date_str, datetime.date):
+        return date_str
+    if isinstance(date_str, datetime.datetime):
+        return date_str.date()
+
     clean = str(date_str).replace("-", "").replace(".", "").replace("/", "").strip()
-    try:
-        return int(clean)
-    except Exception:
-        return clean
+    if len(clean) == 8 and clean.isdigit():
+        try:
+            y = int(clean[:4])
+            m = int(clean[4:6])
+            d = int(clean[6:8])
+            return datetime.date(y, m, d)
+        except Exception:
+            pass
+    return str(date_str).strip() or None
 
 def find_target_sheet(wb):
     """업무추진비 / 법인카드 / 지출 관련 시트 자동 탐색 (없으면 첫 번째 활성 시트 반환)"""
@@ -263,6 +276,11 @@ def fill_receipts_to_excel(template_source=None, receipts: list = None, output_p
                     cell.alignment = copy(st["alignment"])
                     if st["number_format"]:
                         cell.number_format = st["number_format"]
+
+                # 날짜 필드인데 서식이 General이거나 없으면 yyyy-mm-dd로 보정
+                if field == "date" and isinstance(val, (datetime.date, datetime.datetime)):
+                    if not cell.number_format or str(cell.number_format).lower() == "general":
+                        cell.number_format = "yyyy-mm-dd"
         else:
             # 남은 빈 행 정리
             for field, col_idx in col_map.items():
@@ -280,12 +298,30 @@ def fill_receipts_to_excel(template_source=None, receipts: list = None, output_p
                     if st["number_format"]:
                         cell.number_format = st["number_format"]
 
+                # 날짜 필드인데 서식이 General이거나 없으면 yyyy-mm-dd로 보정
+                if field == "date" and isinstance(val, (datetime.date, datetime.datetime)):
+                    if not cell.number_format or str(cell.number_format).lower() == "general":
+                        cell.number_format = "yyyy-mm-dd"
+
     # 소계/합계 수식 업데이트 (행이 늘어난 경우)
     if sum_row and "amount" in col_map:
         amt_col_letter = openpyxl.utils.get_column_letter(col_map["amount"])
         sum_cell = ws.cell(row=sum_row, column=col_map["amount"])
         if sum_cell.value and str(sum_cell.value).startswith("="):
             sum_cell.value = f"=SUM({amt_col_letter}{start_row}:{amt_col_letter}{sum_row - 1})"
+
+    # 날짜/시간 열 너비 자동 보정 (너비 부족으로 인한 '################' 방지)
+    try:
+        if "date" in col_map:
+            d_letter = openpyxl.utils.get_column_letter(col_map["date"])
+            curr_w = ws.column_dimensions[d_letter].width
+            ws.column_dimensions[d_letter].width = max(float(curr_w or 8.5), 14.0)
+        if "time" in col_map:
+            t_letter = openpyxl.utils.get_column_letter(col_map["time"])
+            curr_tw = ws.column_dimensions[t_letter].width
+            ws.column_dimensions[t_letter].width = max(float(curr_tw or 8.5), 10.0)
+    except Exception:
+        pass
 
     # 증빙1 시트 부가 처리 (안전하게 시도하되 실패해도 메인은 정상 출력)
     if "증빙1" in wb.sheetnames and num_receipts > 0:

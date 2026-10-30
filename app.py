@@ -120,6 +120,15 @@ if "excel_template_bytes" not in st.session_state:
     else:
         st.session_state.excel_template_bytes = None
 
+def format_display_date(val):
+    """표시용 날짜 포맷 (YYYY-MM-DD)"""
+    if not val:
+        return ""
+    s = str(val).replace("-", "").replace(".", "").replace("/", "").strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    return str(val)
+
 # 상단 헤더
 st.markdown('<div class="main-title">🧾 법인카드 영수증 자동 정리 & 엑셀 생성</div>', unsafe_allow_html=True)
 st.markdown(
@@ -337,11 +346,11 @@ if st.session_state.receipt_data:
         for r in st.session_state.receipt_data:
             display_rows.append({
                 "연번": r.get("seq", 1),
-                "사용일자": str(r.get("date", "")),
+                "사용일자": format_display_date(r.get("date", "")),
                 "사용시각": str(r.get("time", "")),
                 "사용장소": r.get("store_name", ""),
                 "사용목적(수기메모)": r.get("purpose", ""),
-                "대상인원": r.get("attendees", "3명"),
+                "대상인원": r.get("attendees", ""),
                 "카드끝4자리": str(r.get("card_last4", "")),
                 "금액(원)": int(str(r.get("amount", 0)).replace(",", "")),
                 "사용자": r.get("user_name", "")
