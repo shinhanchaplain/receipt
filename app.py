@@ -14,10 +14,10 @@ st.set_page_config(
     page_title="법인카드 영수증 파싱 & 엑셀 자동화",
     page_icon="🧾",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
-# 커스텀 CSS 스타일링
+# 2. 커스텀 CSS 스타일링
 st.markdown("""
 <style>
     .main-title {
@@ -29,7 +29,7 @@ st.markdown("""
     .sub-title {
         font-size: 1.05rem;
         color: #64748B;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1.2rem;
     }
     .step-header {
         font-size: 1.25rem;
@@ -58,21 +58,55 @@ st.markdown("""
         color: #64748B;
         margin-bottom: 4px;
     }
-    .clean-notice {
-        background-color: #F1F5F9;
-        border-left: 4px solid #3B82F6;
-        padding: 12px 16px;
-        border-radius: 6px;
-        font-size: 0.92rem;
-        color: #334155;
-        margin-bottom: 20px;
+    .api-badge-ok {
+        background-color: #ECFDF5;
+        border: 1px solid #A7F3D0;
+        color: #065F46;
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-size: 0.88rem;
+        font-weight: 600;
+        margin-bottom: 12px;
+    }
+    .api-badge-warn {
+        background-color: #FFFBEB;
+        border: 1px solid #FDE68A;
+        color: #92400E;
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-size: 0.88rem;
+        font-weight: 600;
+        margin-bottom: 12px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 DEFAULT_EXCEL_TEMPLATE = "법인카드 사용내역서.xlsx"
 
-# [보안/공용 PC 대응] 새 창 접속 시 항상 빈(Clean) 상태로 세션 시작
+# 3. API 키 감지 함수 (Streamlit Secrets / 사용자 입력 / 환경변수)
+def detect_gemini_api_key(manual_key: str = "") -> tuple[str, str]:
+    # 1) 사이드바 직접 입력값 우선
+    if manual_key and manual_key.strip():
+        return manual_key.strip(), "사이드바 직접 입력"
+    
+    # 2) Streamlit Cloud Secrets 확인
+    try:
+        if hasattr(st, "secrets"):
+            if "GEMINI_API_KEY" in st.secrets and str(st.secrets["GEMINI_API_KEY"]).strip():
+                return str(st.secrets["GEMINI_API_KEY"]).strip(), "Streamlit Secrets 연동"
+            if "GOOGLE_API_KEY" in st.secrets and str(st.secrets["GOOGLE_API_KEY"]).strip():
+                return str(st.secrets["GOOGLE_API_KEY"]).strip(), "Streamlit Secrets 연동"
+    except Exception:
+        pass
+
+    # 3) OS 환경변수 확인
+    env_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if env_key and env_key.strip():
+        return env_key.strip(), "환경 변수(OS)"
+
+    return "", "미설정"
+
+# 4. 세션 상태 초기화 (클린 세션)
 if "receipt_data" not in st.session_state:
     st.session_state.receipt_data = []
 
@@ -94,42 +128,40 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown("""
-<div class="clean-notice">
-    🔒 <b>개인정보 및 다중 사용자 보안 보호</b>: 본 시스템은 사용자 간 정보 노출을 방지하기 위해 
-    새 창을 띄울 때마다 이전 데이터가 남지 않는 <b>클린 세션(Clean Session)</b>으로 시작합니다. 
-    작업 완료 후 [초기화]를 누르거나 창을 닫으면 입력된 데이터가 즉시 파기됩니다.
-</div>
-""", unsafe_allow_html=True)
-
-# 사이드바 (API 키 및 관리)
+# 사이드바
 with st.sidebar:
     st.header("⚙️ 시스템 설정")
-    api_key_input = st.text_input(
-        "Gemini API Key",
-        type="password",
-        value=os.environ.get("GEMINI_API_KEY", ""),
-        help="새로운 영수증 스캔본을 실시간 비전 AI로 분석할 때 사용합니다."
-    )
-    if api_key_input:
-        os.environ["GEMINI_API_KEY"] = api_key_input
-        st.success("API Key 적용됨")
     
+    sidebar_key_input = st.text_input(
+        "Gemini API Key 직접 입력",
+        type="password",
+        value="",
+        help="Google AI Studio(aistudio.google.com)에서 발급받은 API 키를 입력하세요. Streamlit Secrets에 등록되어 있다면 비워두셔도 자동 감지됩니다."
+    )
+
+    active_api_key, key_source = detect_gemini_api_key(sidebar_key_input)
+    
+    if active_api_key:
+        st.markdown(f'<div class="api-badge-ok">🟢 Gemini AI 활성화됨<br><span style="font-size:0.78rem; font-weight:normal;">({key_source})</span></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="api-badge-warn">⚠️ API Key 필요<br><span style="font-size:0.78rem; font-weight:normal;">새 영수증 분석을 위해 위에 키를 입력하거나 Secrets에 등록하세요.</span></div>', unsafe_allow_html=True)
+        st.markdown("[👉 무료 API Key 발급받기](https://aistudio.google.com/app/apikey)")
+
     st.markdown("---")
-    st.subheader("🧪 시연용 샘플 테스트")
-    if st.button("샘플 영수증 데이터 불러오기", use_container_width=True):
+    st.subheader("🧪 샘플 데이터 테스트")
+    if st.button("내장 샘플 영수증 불러오기", use_container_width=True):
         st.session_state.receipt_data = [dict(r) for r in SAMPLE_RECEIPTS]
-        sample_pdf_path = "영수증.pdf"
-        if os.path.exists(sample_pdf_path):
-            with open(sample_pdf_path, "rb") as f:
+        sample_pdf = "영수증.pdf"
+        if os.path.exists(sample_pdf):
+            with open(sample_pdf, "rb") as f:
                 st.session_state.pdf_images = receipt_parser.extract_images_from_pdf(f.read())
-        st.success("샘플 데이터가 로드되었습니다!")
+        st.success("내장 샘플(파리바게뜨 5건)이 로드되었습니다.")
         st.rerun()
 
-    if st.button("🗑️ 전체 데이터 즉시 비우기 (초기화)", type="secondary", use_container_width=True):
+    if st.button("🗑️ 전체 데이터 초기화 (비우기)", type="secondary", use_container_width=True):
         st.session_state.receipt_data = []
         st.session_state.pdf_images = []
-        st.info("모든 데이터가 깔끔하게 초기화되었습니다.")
+        st.info("데이터가 초기화되었습니다.")
         st.rerun()
 
 # ==============================================================================
@@ -145,30 +177,30 @@ col_up1, col_up2 = st.columns(2)
 
 with col_up1:
     uploaded_excel = st.file_uploader(
-        "1. 정리해서 넣을 엑셀 파일 (.xlsx)",
+        "1. 정리해서 넣을 엑셀 파일 (.xlsx) [선택]",
         type=["xlsx"],
         key="uploader_excel",
         help="법인카드 사용내역서 양식 엑셀 파일입니다. (미업로드 시 기본 표준 서식이 적용됩니다.)"
     )
     if uploaded_excel:
         st.session_state.excel_template_bytes = uploaded_excel.read()
-        st.caption(f"✔ 사용자 업로드 서식 적용: `{uploaded_excel.name}`")
+        st.caption(f"✔ 업로드된 서식 사용: `{uploaded_excel.name}`")
     else:
         st.caption("ℹ 미업로드 시 기본 '법인카드 사용내역서.xlsx' 서식으로 자동 적용됩니다.")
 
 with col_up2:
     uploaded_receipt = st.file_uploader(
-        "2. 스캔한 영수증 파일 (PDF 또는 이미지) *필수*",
+        "2. 스캔한 영수증 파일 (PDF 또는 이미지) [필수]",
         type=["pdf", "png", "jpg", "jpeg"],
         key="uploader_receipt",
         help="분석할 스캔 영수증 파일(PDF, PNG, JPG)을 업로드하세요."
     )
     if uploaded_receipt:
-        st.caption(f"✔ 분석 대기 중: `{uploaded_receipt.name}`")
+        st.caption(f"✔ 분석 대기 중: `{uploaded_receipt.name}` ({len(uploaded_receipt.getvalue()) // 1024:,} KB)")
     else:
         st.caption("※ 분석할 영수증 파일을 여기에 업로드해주세요.")
 
-# 🚀 실행 및 초기화 버튼 영역
+# 🚀 실행 버튼
 col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
 
 with col_btn2:
@@ -176,7 +208,7 @@ with col_btn2:
 
 with col_btn3:
     if st.session_state.receipt_data or st.session_state.pdf_images:
-        if st.button("🗑️ 내역 지우기", use_container_width=True):
+        if st.button("🗑️ 현재 내역 지우기", use_container_width=True):
             st.session_state.receipt_data = []
             st.session_state.pdf_images = []
             st.rerun()
@@ -184,32 +216,54 @@ with col_btn3:
 if run_btn:
     if not uploaded_receipt:
         st.warning("⚠️ 스캔한 영수증 파일(PDF 또는 이미지)을 먼저 업로드해 주세요.")
+    elif not active_api_key:
+        st.error("❌ Gemini API 키가 감지되지 않았습니다! 좌측 사이드바에 API 키를 입력하시거나 Streamlit Secrets에 GEMINI_API_KEY를 설정해주세요.")
     else:
-        with st.spinner("영수증 이미지 및 손글씨(수기) 메모를 분석하여 엑셀 내역을 정리 중입니다..."):
-            receipt_bytes = uploaded_receipt.getvalue()
-            receipt_filename = uploaded_receipt.name
+        receipt_bytes = uploaded_receipt.getvalue()
+        receipt_filename = uploaded_receipt.name
 
-            # 1. 이미지 렌더링 (미리보기용)
+        # 1. 이미지 렌더링 (미리보기용)
+        try:
             if receipt_filename.lower().endswith(".pdf"):
                 st.session_state.pdf_images = receipt_parser.extract_images_from_pdf(receipt_bytes)
             else:
                 st.session_state.pdf_images = [Image.open(io.BytesIO(receipt_bytes))]
+        except Exception as img_err:
+            st.error(f"영수증 이미지를 불러오는 중 오류 발생: {img_err}")
+            st.session_state.pdf_images = []
 
-            # 2. AI 파싱 실행 (확인 안 되는 항목은 공란 세팅)
-            api_key = api_key_input or os.environ.get("GEMINI_API_KEY")
-            parsed_results = receipt_parser.parse_receipt_document(
-                file_bytes=receipt_bytes,
-                file_name=receipt_filename,
-                api_key=api_key
-            )
-            st.session_state.receipt_data = parsed_results
-            st.success(f"🎉 총 {len(parsed_results)}건의 영수증 내역 정리가 완료되었습니다! 아래에서 확인하세요.")
-            st.rerun()
+        # 2. 진행 상태 프로그레스 바 준비
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        def on_progress(current_page, total_pages, msg):
+            pct = int((current_page / total_pages) * 100)
+            progress_bar.progress(pct)
+            status_text.info(f"⏳ {msg}")
+
+        # 3. AI 파싱 실행
+        try:
+            with st.spinner("AI가 영수증 이미지와 수기 메모를 정밀 분석 중입니다..."):
+                parsed_results = receipt_parser.parse_receipt_document(
+                    file_bytes=receipt_bytes,
+                    file_name=receipt_filename,
+                    api_key=active_api_key,
+                    progress_callback=on_progress
+                )
+                st.session_state.receipt_data = parsed_results
+                progress_bar.progress(100)
+                status_text.empty()
+                st.success(f"🎉 총 {len(parsed_results)}건의 영수증 내역을 성공적으로 인식하여 정리했습니다!")
+                st.rerun()
+        except Exception as parse_err:
+            progress_bar.empty()
+            status_text.empty()
+            st.error(f"❌ 영수증 AI 분석 실패: {parse_err}")
 
 st.markdown("---")
 
 # ==============================================================================
-# [STEP 2] 결과 검토 및 실시간 수정 영역 (데이터가 있을 때만 노출)
+# [STEP 2] 결과 검토 및 실시간 수정 영역
 # ==============================================================================
 if st.session_state.receipt_data:
     st.markdown("""
@@ -268,10 +322,10 @@ if st.session_state.receipt_data:
             current_img = st.session_state.pdf_images[page_idx - 1]
             st.image(
                 current_img,
-                caption=f"스캔본 {page_idx}페이지 (영수증 실물 및 상단 증빙서 첨부지)",
+                caption=f"스캔본 {page_idx}페이지 실물",
                 use_container_width=True
             )
-            st.info("💡 영수증 여백에 적힌 수기 메모(예: '이정복 보건소', '영등포 보건소' 등)와 품목/수량을 직접 대조해보실 수 있습니다.")
+            st.info("💡 영수증 여백에 적힌 수기 메모와 품목/금액을 우측 표와 직접 대조해보실 수 있습니다.")
         else:
             st.info("표시할 영수증 이미지가 없습니다.")
 
@@ -288,7 +342,7 @@ if st.session_state.receipt_data:
                 "사용장소": r.get("store_name", ""),
                 "사용목적(수기메모)": r.get("purpose", ""),
                 "대상인원": r.get("attendees", "3명"),
-                "카드끝4자리": str(r.get("card_last4", "9716")),
+                "카드끝4자리": str(r.get("card_last4", "")),
                 "금액(원)": int(str(r.get("amount", 0)).replace(",", "")),
                 "사용자": r.get("user_name", "")
             })
@@ -306,7 +360,7 @@ if st.session_state.receipt_data:
                 "사용장소": st.column_config.TextColumn("사용장소 (가맹점)", width=130),
                 "사용목적(수기메모)": st.column_config.TextColumn("사용목적 (수기메모)", width=130),
                 "대상인원": st.column_config.SelectboxColumn(
-                    "대상인원 (수량기반 자동산출)",
+                    "대상인원 (자동산출)",
                     options=["1명", "2명", "3명", "4명", "5명", "6명", "7명", "8명", "9명", "10명"],
                     width=100
                 ),
@@ -347,7 +401,6 @@ if st.session_state.receipt_data:
         """, unsafe_allow_html=True)
 
         try:
-            # 메모리에서 즉시 엑셀 생성 (디스크에 임시 파일 남기지 않음)
             template_source = st.session_state.excel_template_bytes if st.session_state.excel_template_bytes else DEFAULT_EXCEL_TEMPLATE
 
             excel_bytes = excel_manager.fill_receipts_to_excel(
@@ -383,5 +436,4 @@ if st.session_state.receipt_data:
             else:
                 st.text("품목 상세 정보가 없습니다.")
 else:
-    # 데이터가 없을 때 표시할 클린 안내 화면
-    st.info("👆 위 [1단계]에서 영수증 스캔 파일(PDF 또는 이미지)을 업로드하고 **[실행]** 버튼을 누르면 내역이 생성됩니다.")
+    st.info("👆 위 [1단계]에서 영수증 스캔 파일(PDF 또는 이미지)을 업로드하고 **[실행]** 버튼을 누르면 새 영수증 분석 결과가 나타납니다.")

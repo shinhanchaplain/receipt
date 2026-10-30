@@ -117,22 +117,37 @@ def detect_column_mapping_and_start_row(ws):
 
     return header_row_idx, start_data_row, column_map, sum_row_idx
 
-def fill_receipts_to_excel(template_source, receipts: list, output_path: str = None) -> bytes:
+def fill_receipts_to_excel(template_source=None, receipts: list = None, output_path: str = None, **kwargs) -> bytes:
     """
     법인카드 사용내역서 엑셀 템플릿에 영수증 데이터를 유연하게 매핑하여 주입합니다.
+    - template_source 또는 template_path 키워드 인자 모두 완벽 호환
     - 양식이 조금씩 달라도 헤더 키워드를 탐지하여 정확한 열에 찾아 넣습니다.
     - 서식, 테두리, 수식(=SUM) 보존
     """
-    if isinstance(template_source, (bytes, bytearray)):
-        wb = openpyxl.load_workbook(io.BytesIO(template_source))
-    elif isinstance(template_source, io.BytesIO):
-        wb = openpyxl.load_workbook(template_source)
-    elif isinstance(template_source, str):
-        if not os.path.exists(template_source):
-            raise FileNotFoundError(f"엑셀 템플릿 파일을 찾을 수 없습니다: {template_source}")
-        wb = openpyxl.load_workbook(template_source)
+    # 키워드 인자 호환성 처리
+    source = template_source if template_source is not None else kwargs.get("template_path")
+    if receipts is None and "receipts" in kwargs:
+        receipts = kwargs["receipts"]
+    if receipts is None:
+        receipts = []
+
+    if isinstance(source, (bytes, bytearray)):
+        wb = openpyxl.load_workbook(io.BytesIO(source))
+    elif isinstance(source, io.BytesIO):
+        wb = openpyxl.load_workbook(source)
+    elif isinstance(source, str):
+        if not os.path.exists(source):
+            raise FileNotFoundError(f"엑셀 템플릿 파일을 찾을 수 없습니다: {source}")
+        wb = openpyxl.load_workbook(source)
+    elif source is not None:
+        wb = openpyxl.load_workbook(source)
     else:
-        wb = openpyxl.load_workbook(template_source)
+        # fallback 기본 템플릿
+        default_tpl = "법인카드 사용내역서.xlsx"
+        if os.path.exists(default_tpl):
+            wb = openpyxl.load_workbook(default_tpl)
+        else:
+            raise ValueError("엑셀 템플릿이 지정되지 않았습니다.")
 
     ws = find_target_sheet(wb)
 

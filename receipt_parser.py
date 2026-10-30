@@ -2,11 +2,11 @@ import os
 import io
 import json
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from PIL import Image
 import fitz  # PyMuPDF
 
-# 신규 google-genai SDK와 기존 SDK 모두 유연하게 지원
+# 신규 google-genai SDK 및 기존 SDK 모두 지원
 try:
     from google import genai
     from google.genai import types
@@ -42,22 +42,17 @@ def calculate_attendees(total_quantity: int, total_amount: int) -> str:
             return f"{est}명"
         return "1명"
     
-    # 1인당 금액 산정
     avg_per_item = total_amount / total_quantity if total_quantity > 0 else 0
     
-    # 일반적인 다과/식대/선물류: 개수가 1~15개 사이일 때 개수를 기본 인원으로 채택
     if 1 <= total_quantity <= 15:
-        # 단, 금액이 너무 높은데 개수가 1개인 경우 (예: 5만원 세트 1개)
         if total_quantity == 1 and total_amount >= 30000:
             est = max(2, round(total_amount / 15000))
             return f"{est}명"
-        # 단가가 25,000원 이상 고가 선물세트 여러 개인 경우 (예: 2개인데 10만원)
         if avg_per_item > 25000:
             est = max(total_quantity, round(total_amount / 15000))
             return f"{est}명"
         return f"{total_quantity}명"
     else:
-        # 대량 소형 품목 (개수가 20개 이상 등)일 경우 금액 기준 추정
         est = max(1, round(total_amount / 12000))
         return f"{est}명"
 
@@ -95,54 +90,94 @@ SYSTEM_INSTRUCTION = """
 }
 """
 
-def parse_receipt_page_with_gemini(image: Image.Image, api_key: str, page_num: int = 1) -> List[Dict[str, Any]]:
-    """Gemini 2.0 Flash Vision API를 호출하여 영수증 및 수기 메모 추출"""
-    prompt = "이 이미지에서 영수증들을 분리 분석하고, 특히 영수증 위에 손글씨(수기)로 적힌 메모(보건소명/병원명 등)를 빠짐없이 추출하여 지정된 JSON으로 응답해줘."
-    
-    # 1. New Google GenAI SDK
-    if NEW_GENAI:
-        client = genai.Client(api_key=api_key)
-        # 이미지를 바이트로 변환
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format='JPEG', quality=95)
-        img_bytes = img_byte_arr.getvalue()
-
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=[
-                types.Part.from_bytes(data=img_bytes, mime_type='image/jpeg'),
-                prompt
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                response_mime_type="application/json",
-                temperature=0.1
-            )
-        )
-        raw_text = response.text
-    # 2. Legacy google.generativeai SDK fallback
-    elif legacy_genai is not None:
-        legacy_genai.configure(api_key=api_key)
-        model = legacy_genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=SYSTEM_INSTRUCTION,
-            generation_config={"response_mime_type": "application/json", "temperature": 0.1}
-        )
-        response = model.generate_content([prompt, image])
-        raw_text = response.text
-    else:
-        raise ImportError("google.genai 또는 google.generativeai 라이브러리가 필요합니다.")
-
-    # JSON 파싱
+def _extract_json_from_text(raw_text: str) -> dict:
+    """LLM 응답 텍스트에서 안전하게 JSON 파싱"""
     clean_text = raw_text.strip()
     if clean_text.startswith("```json"):
         clean_text = clean_text[7:]
+    if clean_text.startswith("```"):
+        clean_text = clean_text[3:]
     if clean_text.endswith("```"):
         clean_text = clean_text[:-3]
+    clean_text = clean_text.strip()
+
+    try:
+        return json.loads(clean_text)
+    except Exception:
+        # 혹시 앞뒤로 부연 설명이 섞인 경우 정규식으로 JSON 추출
+        match = re.search(r'(\{[\s\S]*\})', clean_text)
+        if match:
+            return json.loads(match.group(1))
+        raise ValueError(f"AI 응답에서 JSON 형식을 추출할 수 없습니다: {clean_text[:200]}")
+
+def parse_receipt_page_with_gemini(image: Image.Image, api_key: str, page_num: int = 1) -> List[Dict[str, Any]]:
+    """Gemini Vision API를 호출하여 영수증 및 수기 메모 추출 (여러 모델 및 SDK fallback)"""
+    prompt = "이 이미지에서 영수증들을 분리 분석하고, 특히 영수증 위에 손글씨(수기)로 적힌 메모(보건소명/병원명 등)를 빠짐없이 추출하여 지정된 JSON으로 응답해줘."
     
-    data = json.loads(clean_text)
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format='JPEG', quality=95)
+    img_bytes = img_byte_arr.getvalue()
+
+    raw_text = None
+    last_error = None
+
+    # 시도할 모델 순서
+    models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+
+    # 1. New Google GenAI SDK 우선 시도
+    if NEW_GENAI:
+        try:
+            client = genai.Client(api_key=api_key)
+            for m_name in models_to_try:
+                try:
+                    response = client.models.generate_content(
+                        model=m_name,
+                        contents=[
+                            types.Part.from_bytes(data=img_bytes, mime_type='image/jpeg'),
+                            prompt
+                        ],
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_INSTRUCTION,
+                            response_mime_type="application/json",
+                            temperature=0.1
+                        )
+                    )
+                    if response and response.text:
+                        raw_text = response.text
+                        break
+                except Exception as ex:
+                    last_error = ex
+                    continue
+        except Exception as e:
+            last_error = e
+
+    # 2. Legacy google.generativeai SDK fallback
+    if not raw_text and legacy_genai is not None:
+        try:
+            legacy_genai.configure(api_key=api_key)
+            for m_name in ['gemini-1.5-flash', 'gemini-1.5-pro']:
+                try:
+                    model = legacy_genai.GenerativeModel(
+                        model_name=m_name,
+                        system_instruction=SYSTEM_INSTRUCTION,
+                        generation_config={"response_mime_type": "application/json", "temperature": 0.1}
+                    )
+                    response = model.generate_content([prompt, image])
+                    if response and response.text:
+                        raw_text = response.text
+                        break
+                except Exception as ex:
+                    last_error = ex
+                    continue
+        except Exception as e:
+            last_error = e
+
+    if not raw_text:
+        raise RuntimeError(f"Gemini API 호출에 실패했습니다: {last_error}")
+
+    data = _extract_json_from_text(raw_text)
     receipts_list = data.get("receipts", [])
-    
+
     # 대상인원 및 부가정보 계산
     for idx, r in enumerate(receipts_list, start=1):
         r["page_index"] = page_num
@@ -154,39 +189,47 @@ def parse_receipt_page_with_gemini(image: Image.Image, api_key: str, page_num: i
         
         t_amt = r.get("amount", 0)
         r["attendees"] = calculate_attendees(int(t_qty or 1), int(t_amt or 0))
-        
+
     return receipts_list
 
-def parse_receipt_document(file_bytes: bytes, file_name: str, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+def parse_receipt_document(
+    file_bytes: bytes,
+    file_name: str,
+    api_key: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None
+) -> List[Dict[str, Any]]:
     """
     PDF 또는 이미지 파일을 받아 전체 영수증 리스트를 반환합니다.
-    API 키가 없거나 오류 시 샘플 데이터를 반환하여 무중단 체험을 제공합니다.
+    - 실제 파일 분석 시 반드시 유효한 api_key가 필요합니다.
+    - API 키가 없거나 분석 실패 시 명확한 예외를 발생시켜 사용자에게 알립니다.
     """
+    if not api_key or not str(api_key).strip():
+        raise ValueError("Gemini API 키가 입력되지 않았습니다. 사이드바에 API 키를 입력하시거나 Streamlit Secrets에 GEMINI_API_KEY를 등록해 주세요.")
+
     is_pdf = file_name.lower().endswith(".pdf")
-    
     if is_pdf:
         images = extract_images_from_pdf(file_bytes)
     else:
         images = [Image.open(io.BytesIO(file_bytes))]
 
-    if not api_key:
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    total_pages = len(images)
+    if total_pages == 0:
+        raise ValueError("파일에서 분석할 수 있는 이미지를 찾지 못했습니다.")
 
-    # API 키가 있는 경우 Gemini 비전 모델로 직접 파싱
-    if api_key:
-        try:
-            all_receipts = []
-            current_seq = 1
-            for page_idx, img in enumerate(images, start=1):
-                page_receipts = parse_receipt_page_with_gemini(img, api_key=api_key, page_num=page_idx)
-                for r in page_receipts:
-                    r["seq"] = current_seq
-                    current_seq += 1
-                    all_receipts.append(r)
-            if all_receipts:
-                return all_receipts
-        except Exception as e:
-            print(f"Gemini API 호출 중 오류 발생: {e}. 기본 사전 분석 데이터셋으로 대체합니다.")
+    all_receipts = []
+    current_seq = 1
 
-    # API 키가 없거나 호출 실패 시: 기본 샘플 영수증 사전 추출 데이터 반환
-    return SAMPLE_RECEIPTS
+    for page_idx, img in enumerate(images, start=1):
+        if progress_callback:
+            progress_callback(page_idx, total_pages, f"{page_idx}/{total_pages} 페이지 영수증 및 수기 메모 분석 중...")
+
+        page_receipts = parse_receipt_page_with_gemini(img, api_key=api_key.strip(), page_num=page_idx)
+        for r in page_receipts:
+            r["seq"] = current_seq
+            current_seq += 1
+            all_receipts.append(r)
+
+    if not all_receipts:
+        raise ValueError("영수증 이미지에서 내역을 인식하지 못했습니다. 이미지가 선명한지 확인해 주세요.")
+
+    return all_receipts
